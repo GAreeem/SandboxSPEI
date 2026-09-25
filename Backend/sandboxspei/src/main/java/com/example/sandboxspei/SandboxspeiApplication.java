@@ -1,13 +1,13 @@
-package com.example.sandoboxspei;
+package com.example.sandboxspei;
 
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 @SpringBootApplication
-public class SandoboxspeiApplication {
+public class SandboxspeiApplication {
 
 	public static void main(String[] args) {
-		SpringApplication.run(SandoboxspeiApplication.class, args);
+		SpringApplication.run(SandboxspeiApplication.class, args);
 	}
 
 }
