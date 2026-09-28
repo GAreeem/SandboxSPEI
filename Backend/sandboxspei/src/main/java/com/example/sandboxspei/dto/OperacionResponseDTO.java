@@ -2,28 +2,30 @@ package com.example.sandboxspei.dto;
 
 import com.example.sandboxspei.entity.Operacion;
 
-import java.math.BigDecimal;
 import java.time.OffsetDateTime;
 import java.util.List;
 
 /**
  * Representación completa de una operación, usada como respuesta de
  * {@code POST /operaciones} (201/200) y {@code GET /operaciones/{id}}.
+ *
+ * <p>Coincide exactamente con el contrato de la API: {@code importe} es un
+ * objeto anidado (no campos aplanados), y no expone atributos internos de
+ * la entidad como {@code escenarioResuelto} o {@code fechaActualizacion}
+ * (estos siguen existiendo en {@link Operacion} para trazabilidad interna,
+ * simplemente no se serializan aquí).</p>
  */
 public record OperacionResponseDTO(
         String id,
-        String tipoOperacion,
-        EmisorDTO emisor,
-        ReceptorDTO receptor,
-        BigDecimal importeValor,
-        String importeDivisa,
-        String concepto,
-        Integer folioNumerico,
         String referenciaSeguimiento,
         String estado,
-        String escenarioResuelto,
+        String tipoOperacion,
+        ImporteDTO importe,
+        EmisorDTO emisor,
+        ReceptorDTO receptor,
+        String concepto,
+        Integer folioNumerico,
         OffsetDateTime fechaRegistro,
-        OffsetDateTime fechaActualizacion,
         List<TransicionDTO> transiciones
 ) {
 
@@ -49,24 +51,23 @@ public record OperacionResponseDTO(
                 op.getReceptor().getNombre()
         );
 
+        ImporteDTO importeDTO = new ImporteDTO(op.getImporteValor(), op.getImporteDivisa());
+
         List<TransicionDTO> transiciones = op.getTransiciones().stream()
                 .map(TransicionDTO::desdeEntidad)
                 .toList();
 
         return new OperacionResponseDTO(
                 op.getId(),
-                op.getTipoOperacion().name(),
-                emisorDTO,
-                receptorDTO,
-                op.getImporteValor(),
-                op.getImporteDivisa(),
-                op.getConcepto(),
-                op.getFolioNumerico(),
                 op.getReferenciaSeguimiento(),
                 op.getEstado().name(),
-                op.getEscenarioResuelto(),
+                op.getTipoOperacion().name(),
+                importeDTO,
+                emisorDTO,
+                receptorDTO,
+                op.getConcepto(),
+                op.getFolioNumerico(),
                 op.getFechaRegistro(),
-                op.getFechaActualizacion(),
                 transiciones
         );
     }

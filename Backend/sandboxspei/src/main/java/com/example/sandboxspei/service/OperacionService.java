@@ -3,9 +3,6 @@ package com.example.sandboxspei.service;
 import tools.jackson.databind.json.JsonMapper;
 import com.example.sandboxspei.dto.OperacionRequestDTO;
 import com.example.sandboxspei.dto.OperacionResponseDTO;
-import com.example.sandboxspei.engine.EscenarioResolver;
-import com.example.sandboxspei.engine.MaquinaEstados;
-import com.example.sandboxspei.engine.ResultadoEscenario;
 import com.example.sandboxspei.entity.*;
 import com.example.sandboxspei.exception.IdempotenciaConflictoException;
 import com.example.sandboxspei.exception.OperacionNoEncontradaException;
@@ -16,6 +13,8 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -27,8 +26,8 @@ import java.util.UUID;
 /**
  * Servicio de dominio que orquesta el ciclo de vida completo de una
  * operación: validación (V01-V19), verificación de idempotencia, registro
- * en estado {@code RECIBIDO} y ejecución del motor de escenarios
- * deterministas.
+ * en estado {@code RECIBIDO} y disparo del procesamiento asíncrono que
+ * lo lleva a su estado final.
  */
 @Service
 public class OperacionService {
@@ -36,21 +35,18 @@ public class OperacionService {
     private final OperacionRepository operacionRepository;
     private final ClaveIdempotenciaRepository claveIdempotenciaRepository;
     private final ValidadorOperacionService validadorOperacionService;
-    private final EscenarioResolver escenarioResolver;
-    private final MaquinaEstados maquinaEstados;
+    private final ProcesadorAsincronoService procesadorAsincronoService;
     private final JsonMapper objectMapper;
 
     public OperacionService(OperacionRepository operacionRepository,
-                             ClaveIdempotenciaRepository claveIdempotenciaRepository,
-                             ValidadorOperacionService validadorOperacionService,
-                             EscenarioResolver escenarioResolver,
-                             MaquinaEstados maquinaEstados,
+                            ClaveIdempotenciaRepository claveIdempotenciaRepository,
+                            ValidadorOperacionService validadorOperacionService,
+                            ProcesadorAsincronoService procesadorAsincronoService,
                             JsonMapper objectMapper) {
         this.operacionRepository = operacionRepository;
         this.claveIdempotenciaRepository = claveIdempotenciaRepository;
         this.validadorOperacionService = validadorOperacionService;
-        this.escenarioResolver = escenarioResolver;
-        this.maquinaEstados = maquinaEstados;
+        this.procesadorAsincronoService = procesadorAsincronoService;
         this.objectMapper = objectMapper;
     }
 
@@ -60,12 +56,13 @@ public class OperacionService {
      * <p>Orden de evaluación: (1) idempotencia (si aplica un reintento
      * idéntico, se corta aquí sin volver a validar), (2) validación
      * sintáctica/condicional V01-V19 (422, nada se persiste si falla),
-     * (3) registro en RECIBIDO, (4) ejecución del motor de escenarios.</p>
+     * (3) registro en RECIBIDO, (4) disparo del procesamiento asíncrono
+     * tras el commit.</p>
      */
     @Transactional
     public ResultadoCreacionOperacion crearOperacion(OperacionRequestDTO request,
-                                                      String claveIdempotencia,
-                                                      String escenarioForzado) {
+                                                     String claveIdempotencia,
+                                                     String escenarioForzado) {
         String cuerpoCanonico = serializarCanonico(request);
         String hashCuerpo = calcularHash(cuerpoCanonico);
 
@@ -85,10 +82,10 @@ public class OperacionService {
         // V01-V19: valida y acumula errores; lanza ValidacionException (422) sin persistir nada.
         validadorOperacionService.validar(request);
 
+        // Solo se registra en RECIBIDO; el avance a EN_PROCESO y al estado final ocurre en segundo plano.
         Operacion operacion = construirOperacion(request);
         operacionRepository.save(operacion);
-        ejecutarMotorEscenarios(operacion, request, escenarioForzado);
-        operacionRepository.save(operacion);
+        programarProcesamientoAsincrono(operacion.getId(), escenarioForzado);
 
         if (claveIdempotencia != null && !claveIdempotencia.isBlank()) {
             ClaveIdempotencia registro = new ClaveIdempotencia();
@@ -164,29 +161,22 @@ public class OperacionService {
     }
 
     /**
-     * Ejecuta el motor de simulación: mueve la operación de RECIBIDO a
-     * EN_PROCESO y, según el escenario resuelto, a su estado final
-     * (LIQUIDADO, DEVUELTO o EN_INVESTIGACION), o la deja en EN_PROCESO
-     * (S05).
+     * Dispara el procesamiento asíncrono (RECIBIDO → EN_PROCESO → estado
+     * final) <b>solo después de que la transacción de registro haga
+     * commit</b>. Si se lanzara antes, el hilo de fondo podría no encontrar
+     * aún la operación en la base de datos.
      */
-    private void ejecutarMotorEscenarios(Operacion operacion, OperacionRequestDTO request, String escenarioForzado) {
-        ResultadoEscenario resultado = escenarioResolver.resolver(
-                request.receptor().cuenta(),
-                request.receptor().institucion(),
-                escenarioForzado
-        );
-        operacion.setEscenarioResuelto(resultado.codigoEscenario());
-
-        if (resultado.estadoDestino() == EstadoOperacion.EN_PROCESO) {
-            // S05: una sola transición RECIBIDO -> EN_PROCESO con motivo.
-            maquinaEstados.transicionar(operacion, EstadoOperacion.EN_PROCESO, resultado.motivo());
-            return;
+    private void programarProcesamientoAsincrono(String operacionId, String escenarioForzado) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    procesadorAsincronoService.procesar(operacionId, escenarioForzado);
+                }
+            });
+        } else {
+            procesadorAsincronoService.procesar(operacionId, escenarioForzado);
         }
-
-        // Resto de escenarios: primero pasa por EN_PROCESO sin motivo...
-        maquinaEstados.transicionar(operacion, EstadoOperacion.EN_PROCESO, null);
-        // ...y luego a su estado final con el motivo correspondiente.
-        maquinaEstados.transicionar(operacion, resultado.estadoDestino(), resultado.motivo());
     }
 
     private String generarId() {
