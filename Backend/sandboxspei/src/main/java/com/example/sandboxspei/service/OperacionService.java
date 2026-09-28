@@ -1,103 +1,83 @@
 package com.example.sandboxspei.service;
 
-import tools.jackson.databind.json.JsonMapper;
+import com.example.sandboxspei.dto.ErrorValidacionDTO;
 import com.example.sandboxspei.dto.OperacionRequestDTO;
 import com.example.sandboxspei.dto.OperacionResponseDTO;
-import com.example.sandboxspei.entity.*;
-import com.example.sandboxspei.exception.IdempotenciaConflictoException;
+import com.example.sandboxspei.entity.Operacion;
 import com.example.sandboxspei.exception.OperacionNoEncontradaException;
-import com.example.sandboxspei.repository.ClaveIdempotenciaRepository;
+import com.example.sandboxspei.exception.ValidacionException;
 import com.example.sandboxspei.repository.OperacionRepository;
-import com.example.sandboxspei.validation.ValidadorOperacionService;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.transaction.support.TransactionSynchronization;
-import org.springframework.transaction.support.TransactionSynchronizationManager;
 
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
-import java.time.OffsetDateTime;
-import java.util.HexFormat;
+import java.util.List;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
- * Servicio de dominio que orquesta el ciclo de vida completo de una
- * operación: validación (V01-V19), verificación de idempotencia, registro
- * en estado {@code RECIBIDO} y disparo del procesamiento asíncrono que
- * lo lleva a su estado final.
+ * Fachada de operaciones: creación (con idempotencia), consulta por id y
+ * listado paginado.
+ *
+ * <p>{@link #crearOperacion} NO es transaccional a propósito: delega la
+ * transacción en {@link RegistroOperacionService} y así puede capturar, ya
+ * fuera de ella, el error de llave duplicada que ocurre cuando dos
+ * peticiones idénticas con la misma clave llegan al mismo tiempo.</p>
  */
 @Service
 public class OperacionService {
 
     private final OperacionRepository operacionRepository;
-    private final ClaveIdempotenciaRepository claveIdempotenciaRepository;
-    private final ValidadorOperacionService validadorOperacionService;
-    private final ProcesadorAsincronoService procesadorAsincronoService;
-    private final JsonMapper objectMapper;
+    private final RegistroOperacionService registroOperacionService;
+    private final IdempotenciaService idempotenciaService;
+    private final IdempotenciaHasher idempotenciaHasher;
 
     public OperacionService(OperacionRepository operacionRepository,
-                            ClaveIdempotenciaRepository claveIdempotenciaRepository,
-                            ValidadorOperacionService validadorOperacionService,
-                            ProcesadorAsincronoService procesadorAsincronoService,
-                            JsonMapper objectMapper) {
+                            RegistroOperacionService registroOperacionService,
+                            IdempotenciaService idempotenciaService,
+                            IdempotenciaHasher idempotenciaHasher) {
         this.operacionRepository = operacionRepository;
-        this.claveIdempotenciaRepository = claveIdempotenciaRepository;
-        this.validadorOperacionService = validadorOperacionService;
-        this.procesadorAsincronoService = procesadorAsincronoService;
-        this.objectMapper = objectMapper;
+        this.registroOperacionService = registroOperacionService;
+        this.idempotenciaService = idempotenciaService;
+        this.idempotenciaHasher = idempotenciaHasher;
     }
 
-    /**
-     * Procesa una solicitud de registro de operación de pago.
-     *
-     * <p>Orden de evaluación: (1) idempotencia (si aplica un reintento
-     * idéntico, se corta aquí sin volver a validar), (2) validación
-     * sintáctica/condicional V01-V19 (422, nada se persiste si falla),
-     * (3) registro en RECIBIDO, (4) disparo del procesamiento asíncrono
-     * tras el commit.</p>
-     */
-    @Transactional
     public ResultadoCreacionOperacion crearOperacion(OperacionRequestDTO request,
                                                      String claveIdempotencia,
                                                      String escenarioForzado) {
-        String cuerpoCanonico = serializarCanonico(request);
-        String hashCuerpo = calcularHash(cuerpoCanonico);
+        try {
+            return registroOperacionService.registrar(request, claveIdempotencia, escenarioForzado);
+        } catch (DataIntegrityViolationException e) {
+            return resolverDuplicadoConcurrente(request, claveIdempotencia, e);
+        }
+    }
 
+    /**
+     * Carrera entre peticiones simultáneas: la otra petición ganó y ya hizo
+     * commit, así que esta transacción se revirtió por llave duplicada
+     * (clave de idempotencia o referenciaSeguimiento). Se vuelve a consultar
+     * en una transacción nueva y se responde como si hubiera llegado después:
+     * 200 (mismo cuerpo) o 409 (cuerpo distinto).
+     */
+    private ResultadoCreacionOperacion resolverDuplicadoConcurrente(OperacionRequestDTO request,
+                                                                     String claveIdempotencia,
+                                                                     DataIntegrityViolationException causa) {
         if (claveIdempotencia != null && !claveIdempotencia.isBlank()) {
-            Optional<ClaveIdempotencia> existente = claveIdempotenciaRepository.findByClave(claveIdempotencia);
-            if (existente.isPresent()) {
-                ClaveIdempotencia registro = existente.get();
-                if (!registro.getHashCuerpo().equals(hashCuerpo)) {
-                    throw new IdempotenciaConflictoException();
-                }
-                Operacion operacionOriginal = operacionRepository.findById(registro.getOperacionId())
-                        .orElseThrow(() -> new OperacionNoEncontradaException(registro.getOperacionId()));
-                return new ResultadoCreacionOperacion(OperacionResponseDTO.desdeEntidad(operacionOriginal), false);
+            String hash = idempotenciaHasher.calcularHash(request);
+            Optional<ResultadoCreacionOperacion> reintento =
+                    idempotenciaService.resolverReintento(claveIdempotencia, hash, request);
+            if (reintento.isPresent()) {
+                return reintento.get();
             }
         }
-
-        // V01-V19: valida y acumula errores; lanza ValidacionException (422) sin persistir nada.
-        validadorOperacionService.validar(request);
-
-        // Solo se registra en RECIBIDO; el avance a EN_PROCESO y al estado final ocurre en segundo plano.
-        Operacion operacion = construirOperacion(request);
-        operacionRepository.save(operacion);
-        programarProcesamientoAsincrono(operacion.getId(), escenarioForzado);
-
-        if (claveIdempotencia != null && !claveIdempotencia.isBlank()) {
-            ClaveIdempotencia registro = new ClaveIdempotencia();
-            registro.setClave(claveIdempotencia);
-            registro.setHashCuerpo(hashCuerpo);
-            registro.setOperacionId(operacion.getId());
-            registro.setCuerpoOriginal(cuerpoCanonico);
-            registro.setFechaCreacion(OffsetDateTime.now());
-            claveIdempotenciaRepository.save(registro);
+        // Sin clave (o clave distinta): la única otra restricción única es la referencia.
+        if (request.referenciaSeguimiento() != null
+                && operacionRepository.existsByReferenciaSeguimiento(request.referenciaSeguimiento())) {
+            throw new ValidacionException(List.of(new ErrorValidacionDTO("PRX-010", "referenciaSeguimiento",
+                    "La referencia de seguimiento ya fue registrada previamente")), request.referenciaSeguimiento());
         }
-
-        return new ResultadoCreacionOperacion(OperacionResponseDTO.desdeEntidad(operacion), true);
+        throw causa;
     }
 
     @Transactional(readOnly = true)
@@ -111,93 +91,5 @@ public class OperacionService {
     public Page<OperacionResponseDTO> listar(Pageable pageable) {
         return operacionRepository.findAllByOrderByFechaRegistroDesc(pageable)
                 .map(OperacionResponseDTO::desdeEntidad);
-    }
-
-    // ---- Métodos auxiliares privados ----
-
-    private Operacion construirOperacion(OperacionRequestDTO request) {
-        Operacion operacion = new Operacion();
-        operacion.setId(generarId());
-        operacion.setTipoOperacion(TipoOperacion.valueOf(request.tipoOperacion()));
-
-        ParteOperacion emisor = new ParteOperacion(
-                request.emisor().institucion(),
-                request.emisor().cuenta(),
-                request.emisor().nombre(),
-                request.emisor().sucursal()
-        );
-        operacion.setEmisor(emisor);
-
-        if (request.emisor().documentoIdentidad() != null) {
-            operacion.setEmisorDocumentoIdentidad(new DocumentoIdentidad(
-                    request.emisor().documentoIdentidad().tipo(),
-                    request.emisor().documentoIdentidad().numero()
-            ));
-        } else {
-            operacion.setEmisorDocumentoIdentidad(new DocumentoIdentidad());
-        }
-
-        ParteOperacion receptor = new ParteOperacion(
-                request.receptor().institucion(),
-                request.receptor().cuenta(),
-                request.receptor().nombre(),
-                null
-        );
-        operacion.setReceptor(receptor);
-
-        operacion.setImporteValor(request.importe().valor());
-        operacion.setImporteDivisa(request.importe().divisa());
-        operacion.setConcepto(request.concepto());
-        operacion.setFolioNumerico(request.folioNumerico());
-        operacion.setReferenciaSeguimiento(request.referenciaSeguimiento());
-
-        OffsetDateTime ahora = OffsetDateTime.now();
-        operacion.setFechaRegistro(ahora);
-        operacion.setFechaActualizacion(ahora);
-
-        // Estado inicial: toda instrucción sintácticamente válida se acepta.
-        operacion.agregarTransicion(EstadoOperacion.RECIBIDO, null);
-        return operacion;
-    }
-
-    /**
-     * Dispara el procesamiento asíncrono (RECIBIDO → EN_PROCESO → estado
-     * final) <b>solo después de que la transacción de registro haga
-     * commit</b>. Si se lanzara antes, el hilo de fondo podría no encontrar
-     * aún la operación en la base de datos.
-     */
-    private void programarProcesamientoAsincrono(String operacionId, String escenarioForzado) {
-        if (TransactionSynchronizationManager.isSynchronizationActive()) {
-            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                @Override
-                public void afterCommit() {
-                    procesadorAsincronoService.procesar(operacionId, escenarioForzado);
-                }
-            });
-        } else {
-            procesadorAsincronoService.procesar(operacionId, escenarioForzado);
-        }
-    }
-
-    private String generarId() {
-        return "op_" + UUID.randomUUID().toString().replace("-", "");
-    }
-
-    private String serializarCanonico(OperacionRequestDTO request) {
-        try {
-            return objectMapper.writeValueAsString(request);
-        } catch (Exception e) {
-            throw new IllegalStateException("No fue posible serializar el cuerpo de la petición", e);
-        }
-    }
-
-    private String calcularHash(String contenido) {
-        try {
-            MessageDigest digest = MessageDigest.getInstance("SHA-256");
-            byte[] hash = digest.digest(contenido.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(hash);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("Algoritmo de hash no disponible", e);
-        }
     }
 }

@@ -1,11 +1,14 @@
 package com.example.sandboxspei.exception;
 
 import com.example.sandboxspei.dto.ErrorResponseDTO;
+import com.example.sandboxspei.dto.ErrorValidacionDTO;
 import com.example.sandboxspei.dto.ErrorValidacionResponseDTO;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
+
+import java.util.List;
 
 /**
  * Manejo global y centralizado de excepciones de la API. Traduce cada
@@ -34,12 +37,18 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Reutilización de Clave-Idempotencia con cuerpo distinto → 409.
+     * Reutilización de Clave-Idempotencia con cuerpo distinto → 409 con la
+     * estructura oficial de error (referenciaSeguimiento + lista de errores).
      */
     @ExceptionHandler(IdempotenciaConflictoException.class)
-    public ResponseEntity<ErrorResponseDTO> manejarConflictoIdempotencia(IdempotenciaConflictoException ex) {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ErrorResponseDTO.de(IdempotenciaConflictoException.CODIGO, ex.getMessage()));
+    public ResponseEntity<ErrorValidacionResponseDTO> manejarConflictoIdempotencia(IdempotenciaConflictoException ex) {
+        ErrorValidacionResponseDTO cuerpo = new ErrorValidacionResponseDTO(
+                ex.getReferenciaSeguimiento(),
+                List.of(new ErrorValidacionDTO(
+                        IdempotenciaConflictoException.CODIGO,
+                        IdempotenciaConflictoException.CAMPO,
+                        IdempotenciaConflictoException.MENSAJE)));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(cuerpo);
     }
 
     /**
