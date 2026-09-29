@@ -3,8 +3,11 @@ package com.example.sandboxspei.service;
 import com.example.sandboxspei.dto.ErrorValidacionDTO;
 import com.example.sandboxspei.dto.OperacionRequestDTO;
 import com.example.sandboxspei.dto.OperacionResponseDTO;
+import com.example.sandboxspei.engine.MaquinaEstados;
+import com.example.sandboxspei.entity.EstadoOperacion;
 import com.example.sandboxspei.entity.Operacion;
 import com.example.sandboxspei.exception.OperacionNoEncontradaException;
+import com.example.sandboxspei.exception.TransicionInvalidaException;
 import com.example.sandboxspei.exception.ValidacionException;
 import com.example.sandboxspei.repository.OperacionRepository;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -32,15 +35,18 @@ public class OperacionService {
     private final RegistroOperacionService registroOperacionService;
     private final IdempotenciaService idempotenciaService;
     private final IdempotenciaHasher idempotenciaHasher;
+    private final MaquinaEstados maquinaEstados;
 
     public OperacionService(OperacionRepository operacionRepository,
                             RegistroOperacionService registroOperacionService,
                             IdempotenciaService idempotenciaService,
-                            IdempotenciaHasher idempotenciaHasher) {
+                            IdempotenciaHasher idempotenciaHasher,
+                            MaquinaEstados maquinaEstados) {
         this.operacionRepository = operacionRepository;
         this.registroOperacionService = registroOperacionService;
         this.idempotenciaService = idempotenciaService;
         this.idempotenciaHasher = idempotenciaHasher;
+        this.maquinaEstados = maquinaEstados;
     }
 
     public ResultadoCreacionOperacion crearOperacion(OperacionRequestDTO request,
@@ -78,6 +84,41 @@ public class OperacionService {
                     "La referencia de seguimiento ya fue registrada previamente")), request.referenciaSeguimiento());
         }
         throw causa;
+    }
+
+    /**
+     * Solicita un cambio de estado manual (Caso A21). Toda la validación la
+     * hace {@link MaquinaEstados}: si la transición no está permitida (por
+     * ejemplo LIQUIDADO → DEVUELTO, o cualquier salida de un estado
+     * terminal) lanza {@link TransicionInvalidaException} (HTTP 409, PRX-014)
+     * y la operación NO se modifica. Si es válida, queda registrada en
+     * {@code transiciones} con su momento y motivo.
+     *
+     * <p>La operación se lee con bloqueo (SELECT ... FOR UPDATE) para no
+     * competir con el avance asíncrono.</p>
+     */
+    @Transactional
+    public OperacionResponseDTO solicitarTransicion(String id, String estadoSolicitado, String motivo) {
+        Operacion operacion = operacionRepository.findByIdForUpdate(id)
+                .orElseThrow(() -> new OperacionNoEncontradaException(id));
+
+        if (estadoSolicitado == null || estadoSolicitado.isBlank()) {
+            throw new ValidacionException(List.of(new ErrorValidacionDTO("PRX-011", "estado",
+                    "El campo 'estado' es obligatorio")), operacion.getReferenciaSeguimiento());
+        }
+
+        EstadoOperacion destino;
+        try {
+            destino = EstadoOperacion.valueOf(estadoSolicitado.trim().toUpperCase());
+        } catch (IllegalArgumentException e) {
+            // Un estado desconocido tampoco es una transición permitida.
+            throw new TransicionInvalidaException(
+                    operacion.getReferenciaSeguimiento(), operacion.getEstado(), estadoSolicitado);
+        }
+
+        maquinaEstados.transicionar(operacion, destino, motivo);
+        operacionRepository.save(operacion);
+        return OperacionResponseDTO.desdeEntidad(operacion);
     }
 
     @Transactional(readOnly = true)

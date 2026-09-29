@@ -3,6 +3,7 @@ package com.example.sandboxspei.controller;
 import com.example.sandboxspei.dto.OperacionRequestDTO;
 import com.example.sandboxspei.dto.OperacionResponseDTO;
 import com.example.sandboxspei.dto.PaginaResponseDTO;
+import com.example.sandboxspei.dto.TransicionRequestDTO;
 import com.example.sandboxspei.service.OperacionService;
 import com.example.sandboxspei.service.ResultadoCreacionOperacion;
 import io.swagger.v3.oas.annotations.Operation;
@@ -21,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
  */
 @RestController
 @RequestMapping("/api/v1")
+@CrossOrigin(origins = "*")
 @Tag(name = "Operaciones", description = "Registro y consulta de instrucciones de pago SPEI simuladas")
 public class OperacionController {
 
@@ -52,6 +54,16 @@ public class OperacionController {
     @GetMapping("/operaciones/{id}")
     public ResponseEntity<OperacionResponseDTO> obtenerOperacion(@PathVariable String id) {
         return ResponseEntity.ok(operacionService.obtenerPorId(id));
+    }
+
+    @Operation(summary = "Solicita una transición de estado manual",
+            description = "Valida contra la máquina de estados. Si la transición no está permitida "
+                    + "(p. ej. LIQUIDADO -> DEVUELTO, o salir de un estado terminal) responde 409 con PRX-014.")
+    @PostMapping("/operaciones/{id}/transiciones")
+    public ResponseEntity<OperacionResponseDTO> solicitarTransicion(
+            @PathVariable String id,
+            @RequestBody TransicionRequestDTO request) {
+        return ResponseEntity.ok(operacionService.solicitarTransicion(id, request.estado(), request.motivo()));
     }
 
     @Operation(summary = "Lista operaciones de forma paginada",

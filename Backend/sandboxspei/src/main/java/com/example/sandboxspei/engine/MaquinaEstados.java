@@ -11,45 +11,73 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Máquina de estados explícita que controla estrictamente las transiciones
- * permitidas entre los estados de una {@link Operacion}. Cualquier intento
- * de transición fuera de la tabla definida provoca HTTP 409 (PRX-014).
+ * Máquina de estados explícita: ÚNICO punto por el que una {@link Operacion}
+ * puede cambiar de estado después de su registro. Cada transición aceptada
+ * queda auditada en la lista {@code transiciones} de la operación (estado,
+ * momento y motivo).
+ *
+ * <h3>Matriz de transiciones permitidas</h3>
+ * <pre>
+ *   RECIBIDO   → EN_PROCESO, RECHAZADO
+ *   EN_PROCESO → LIQUIDADO, DEVUELTO, EN_INVESTIGACION
+ * </pre>
+ * <ul>
+ *   <li><b>Estados terminales</b> ({@code LIQUIDADO}, {@code DEVUELTO},
+ *       {@code RECHAZADO}): inmutables, no pueden pasar a NINGÚN estado.</li>
+ *   <li>{@code EN_INVESTIGACION} no tiene salidas definidas en la matriz, por
+ *       lo que tampoco admite transiciones.</li>
+ *   <li>Pasar al mismo estado (p. ej. EN_PROCESO → EN_PROCESO) tampoco está
+ *       permitido.</li>
+ * </ul>
+ * Cualquier otro intento lanza {@link TransicionInvalidaException}
+ * (HTTP 409, PRX-014) SIN modificar la operación.
  */
 @Component
 public class MaquinaEstados {
 
-    private static final Map<EstadoOperacion, Set<EstadoOperacion>> TRANSICIONES_PERMITIDAS = new EnumMap<>(EstadoOperacion.class);
+    /** Estados finales: inmutables bajo cualquier circunstancia. */
+    private static final Set<EstadoOperacion> ESTADOS_TERMINALES =
+            EnumSet.of(EstadoOperacion.LIQUIDADO, EstadoOperacion.DEVUELTO, EstadoOperacion.RECHAZADO);
+
+    private static final Map<EstadoOperacion, Set<EstadoOperacion>> TRANSICIONES_PERMITIDAS =
+            new EnumMap<>(EstadoOperacion.class);
 
     static {
-        TRANSICIONES_PERMITIDAS.put(EstadoOperacion.RECIBIDO,
-                EnumSet.of(EstadoOperacion.EN_PROCESO, EstadoOperacion.RECHAZADO));
-        TRANSICIONES_PERMITIDAS.put(EstadoOperacion.EN_PROCESO,
-                EnumSet.of(EstadoOperacion.LIQUIDADO, EstadoOperacion.DEVUELTO, EstadoOperacion.EN_INVESTIGACION));
-        TRANSICIONES_PERMITIDAS.put(EstadoOperacion.LIQUIDADO, EnumSet.noneOf(EstadoOperacion.class));
-        TRANSICIONES_PERMITIDAS.put(EstadoOperacion.DEVUELTO, EnumSet.noneOf(EstadoOperacion.class));
-        TRANSICIONES_PERMITIDAS.put(EstadoOperacion.RECHAZADO, EnumSet.noneOf(EstadoOperacion.class));
-        TRANSICIONES_PERMITIDAS.put(EstadoOperacion.EN_INVESTIGACION, EnumSet.noneOf(EstadoOperacion.class));
+        for (EstadoOperacion estado : EstadoOperacion.values()) {
+            TRANSICIONES_PERMITIDAS.put(estado, EnumSet.noneOf(EstadoOperacion.class));
+        }
+        TRANSICIONES_PERMITIDAS.get(EstadoOperacion.RECIBIDO)
+                .addAll(EnumSet.of(EstadoOperacion.EN_PROCESO, EstadoOperacion.RECHAZADO));
+        TRANSICIONES_PERMITIDAS.get(EstadoOperacion.EN_PROCESO)
+                .addAll(EnumSet.of(EstadoOperacion.LIQUIDADO, EstadoOperacion.DEVUELTO, EstadoOperacion.EN_INVESTIGACION));
+    }
+
+    public boolean esEstadoTerminal(EstadoOperacion estado) {
+        return ESTADOS_TERMINALES.contains(estado);
     }
 
     /**
-     * Indica si la transición del estado {@code origen} al {@code destino}
-     * está permitida por la tabla de estados.
+     * Indica si {@code origen → destino} está permitida. Un estado terminal
+     * nunca permite salida, aunque la tabla llegara a tener una entrada.
      */
     public boolean esTransicionPermitida(EstadoOperacion origen, EstadoOperacion destino) {
+        if (origen == null || destino == null || esEstadoTerminal(origen)) {
+            return false;
+        }
         return TRANSICIONES_PERMITIDAS.getOrDefault(origen, Set.of()).contains(destino);
     }
 
     /**
-     * Aplica una transición de estado sobre la operación, validando
-     * previamente que sea una transición permitida. Registra la transición
-     * en el historial cronológico de la operación.
+     * Aplica la transición y registra la auditoría (estado, momento, motivo).
+     * Si no está permitida, lanza la excepción ANTES de tocar la operación.
      *
-     * @throws TransicionInvalidaException si la transición no está permitida (PRX-014, HTTP 409)
+     * @throws TransicionInvalidaException PRX-014, HTTP 409
      */
     public void transicionar(Operacion operacion, EstadoOperacion destino, String motivo) {
         EstadoOperacion origen = operacion.getEstado();
         if (!esTransicionPermitida(origen, destino)) {
-            throw new TransicionInvalidaException(origen, destino);
+            throw new TransicionInvalidaException(
+                    operacion.getReferenciaSeguimiento(), origen, destino != null ? destino.name() : null);
         }
         operacion.agregarTransicion(destino, motivo);
     }

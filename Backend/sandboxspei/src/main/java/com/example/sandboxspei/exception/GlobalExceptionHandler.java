@@ -52,12 +52,18 @@ public class GlobalExceptionHandler {
     }
 
     /**
-     * Transición de estado no permitida → 409.
+     * Transición de estado no permitida (Caso A21) → 409 con la estructura
+     * oficial: referenciaSeguimiento + lista de errores (PRX-014, campo "estado").
      */
     @ExceptionHandler(TransicionInvalidaException.class)
-    public ResponseEntity<ErrorResponseDTO> manejarTransicionInvalida(TransicionInvalidaException ex) {
-        return ResponseEntity.status(HttpStatus.CONFLICT)
-                .body(ErrorResponseDTO.de(TransicionInvalidaException.CODIGO, ex.getMessage()));
+    public ResponseEntity<ErrorValidacionResponseDTO> manejarTransicionInvalida(TransicionInvalidaException ex) {
+        ErrorValidacionResponseDTO cuerpo = new ErrorValidacionResponseDTO(
+                ex.getReferenciaSeguimiento(),
+                List.of(new ErrorValidacionDTO(
+                        TransicionInvalidaException.CODIGO,
+                        TransicionInvalidaException.CAMPO,
+                        ex.getMessage())));
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(cuerpo);
     }
 
     /**
