@@ -17,7 +17,7 @@ import EstadoChip from '../components/EstadoChip';
 import ErrorAlert from '../components/ErrorAlert';
 import { obtenerOperacion, solicitarTransicion } from '../api/operaciones';
 
-const ESTADOS_POSIBLES = ['RECIBIDO', 'EN_PROCESO', 'LIQUIDADO', 'DEVUELTO', 'RECHAZADO', 'EN_INVESTIGACION'];
+const ESTADOS_POSIBLES = ['DEVUELTO'];
 
 function formatoFecha(iso) {
   if (!iso) return '—';
