@@ -95,8 +95,16 @@ public class ValidadorOperacionService {
         validarNombre(emisor.nombre(), "emisor.nombre", errores);
     }
 
+    private static final String REGEX_SOLO_LETRAS =
+            "^[\\p{L} ]{1,40}$"; // \p{L} = cualquier letra Unicode (incluye á, é, ñ, etc.), más espacios
+
     private void validarNombre(String nombre, String campo, List<ErrorValidacionDTO> errores) {
         if (nombre == null || nombre.isBlank() || nombre.length() > 40) {
+            errores.add(new ErrorValidacionDTO("PRX-011", campo,
+                    "El campo '" + campo + "' es obligatorio y debe tener entre 1 y 40 caracteres"));
+            return;
+        }
+        if (!nombre.matches(REGEX_SOLO_LETRAS)) {
             errores.add(new ErrorValidacionDTO("PRX-011", campo,
                     "El campo '" + campo + "' es obligatorio y debe tener entre 1 y 40 caracteres"));
         }
@@ -166,6 +174,10 @@ public class ValidadorOperacionService {
     private void validarConcepto(OperacionRequestDTO request, List<ErrorValidacionDTO> errores) {
         String concepto = request.concepto();
         if (concepto == null || concepto.isEmpty() || concepto.length() > 40) {
+            errores.add(new ErrorValidacionDTO("PRX-007", "concepto", "El concepto debe tener entre 1 y 40 caracteres"));
+            return;
+        }
+        if (!concepto.matches(REGEX_SOLO_LETRAS)) {
             errores.add(new ErrorValidacionDTO("PRX-007", "concepto", "El concepto debe tener entre 1 y 40 caracteres"));
         }
     }
