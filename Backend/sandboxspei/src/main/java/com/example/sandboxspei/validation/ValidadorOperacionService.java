@@ -44,8 +44,7 @@ public class ValidadorOperacionService {
     public void validar(OperacionRequestDTO request) {
         List<ErrorValidacionDTO> errores = new ArrayList<>();
 
-        // V13: tipoOperacion válido. Si es inválido, no podemos evaluar las
-        // reglas condicionadas por tipo, pero sí el resto.
+
         TipoOperacion tipoOperacion = null;
         if (request.tipoOperacion() == null
                 || !(request.tipoOperacion().equals("T2T") || request.tipoOperacion().equals("VNT"))) {
