@@ -38,6 +38,9 @@ public class Operacion {
     @Embedded
     private DocumentoIdentidad emisorDocumentoIdentidad;
 
+    @Column(name = "emisor_identificacion_fiscal", length = 13)
+    private String emisorIdentificacionFiscal;
+
     @Embedded
     @AttributeOverrides({
             @AttributeOverride(name = "institucion", column = @Column(name = "receptor_institucion", length = 3)),
@@ -114,6 +117,14 @@ public class Operacion {
 
     public void setEmisorDocumentoIdentidad(DocumentoIdentidad emisorDocumentoIdentidad) {
         this.emisorDocumentoIdentidad = emisorDocumentoIdentidad;
+    }
+
+    public String getEmisorIdentificacionFiscal() {
+        return emisorIdentificacionFiscal;
+    }
+
+    public void setEmisorIdentificacionFiscal(String emisorIdentificacionFiscal) {
+        this.emisorIdentificacionFiscal = emisorIdentificacionFiscal;
     }
 
     public ParteOperacion getReceptor() {

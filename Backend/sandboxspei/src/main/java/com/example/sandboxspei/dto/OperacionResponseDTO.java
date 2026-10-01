@@ -42,7 +42,8 @@ public record OperacionResponseDTO(
                 op.getEmisor().getCuenta(),
                 op.getEmisor().getNombre(),
                 op.getEmisor().getSucursal(),
-                doc
+                doc,
+                op.getEmisorIdentificacionFiscal()
         );
 
         ReceptorDTO receptorDTO = new ReceptorDTO(

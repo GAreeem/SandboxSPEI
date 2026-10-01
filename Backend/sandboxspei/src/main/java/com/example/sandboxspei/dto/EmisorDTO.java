@@ -18,6 +18,7 @@ public record EmisorDTO(
         String cuenta,
         String nombre,
         String sucursal,
-        DocumentoIdentidadDTO documentoIdentidad
+        DocumentoIdentidadDTO documentoIdentidad,
+        String identificacionFiscal
 ) {
 }

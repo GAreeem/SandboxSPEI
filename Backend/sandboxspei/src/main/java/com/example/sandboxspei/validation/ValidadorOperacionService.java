@@ -1,9 +1,6 @@
 package com.example.sandboxspei.validation;
 
-import com.example.sandboxspei.dto.EmisorDTO;
-import com.example.sandboxspei.dto.ErrorValidacionDTO;
-import com.example.sandboxspei.dto.OperacionRequestDTO;
-import com.example.sandboxspei.dto.ReceptorDTO;
+import com.example.sandboxspei.dto.*;
 import com.example.sandboxspei.entity.Institucion;
 import com.example.sandboxspei.entity.TipoOperacion;
 import com.example.sandboxspei.exception.ValidacionException;
@@ -93,6 +90,7 @@ public class ValidadorOperacionService {
             return;
         }
         validarNombre(emisor.nombre(), "emisor.nombre", errores);
+        validarIdentificacionFiscal(emisor, errores);
     }
 
     private static final String REGEX_NOMBRE =
@@ -207,6 +205,27 @@ public class ValidadorOperacionService {
         }
     }
 
+    private static final String REGEX_TIPO_DOCUMENTO = "^(?=.{1,30}$)\\p{L}+(?: \\p{L}+)*$";
+    private static final String REGEX_NUMERO_DOCUMENTO = "^[A-Za-z0-9]{1,20}$";
+
+    private void validarDocumentoIdentidad(DocumentoIdentidadDTO doc, List<ErrorValidacionDTO> errores) {
+        if (doc == null
+                || doc.tipo() == null || doc.tipo().isBlank()
+                || doc.numero() == null || doc.numero().isBlank()) {
+            errores.add(new ErrorValidacionDTO("PRX-011", "emisor.documentoIdentidad",
+                    "emisor.documentoIdentidad (tipo y numero) es obligatorio para operaciones VNT"));
+            return; // si falta algo, no tiene caso validar formato
+        }
+        if (!doc.tipo().matches(REGEX_TIPO_DOCUMENTO)) {
+            errores.add(new ErrorValidacionDTO("PRX-011", "emisor.documentoIdentidad",
+                    "emisor.documentoIdentidad El tipo de documento solo debe contener letras"));
+        }
+        if (!doc.numero().matches(REGEX_NUMERO_DOCUMENTO)) {
+            errores.add(new ErrorValidacionDTO("PRX-011", "emisor.documentoIdentidad",
+                    "emisor.documentoIdentidad en numero debe contener letras y dígitos, sin símbolos"));
+        }
+    }
+
     private void validarReglasCondicionadas(TipoOperacion tipoOperacion, EmisorDTO emisor, ReceptorDTO receptor,
                                              List<ErrorValidacionDTO> errores) {
         if (emisor == null) {
@@ -249,12 +268,19 @@ public class ValidadorOperacionService {
                 errores.add(new ErrorValidacionDTO("PRX-011", "emisor.sucursal",
                         "emisor.sucursal es obligatoria para operaciones VNT"));
             }
-            if (emisor.documentoIdentidad() == null
-                    || emisor.documentoIdentidad().tipo() == null || emisor.documentoIdentidad().tipo().isBlank()
-                    || emisor.documentoIdentidad().numero() == null || emisor.documentoIdentidad().numero().isBlank()) {
-                errores.add(new ErrorValidacionDTO("PRX-011", "emisor.documentoIdentidad",
-                        "emisor.documentoIdentidad (tipo y numero) es obligatorio para operaciones VNT"));
-            }
+            validarDocumentoIdentidad(emisor.documentoIdentidad(), errores);
+        }
+    }
+
+    private static final String REGEX_RFC = "^[A-ZÑ&]{3,4}\\d{6}[A-Z0-9]{3}$";
+    private void validarIdentificacionFiscal(EmisorDTO emisor, List<ErrorValidacionDTO> errores) {
+        String rfc = emisor.identificacionFiscal();
+        if (rfc == null || rfc.isBlank()) {
+            return; // opcional: si no viene, no se valida formato
+        }
+        if (!rfc.matches(REGEX_RFC)) {
+            errores.add(new ErrorValidacionDTO("PRX-018", "emisor.identificacionFiscal",
+                    "La identificación fiscal (RFC) no tiene un formato válido"));
         }
     }
 }

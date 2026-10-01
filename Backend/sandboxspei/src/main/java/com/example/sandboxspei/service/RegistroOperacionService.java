@@ -98,6 +98,7 @@ public class RegistroOperacionService {
         Operacion operacion = new Operacion();
         operacion.setId("op_" + UUID.randomUUID().toString().replace("-", ""));
         operacion.setTipoOperacion(TipoOperacion.valueOf(request.tipoOperacion()));
+        operacion.setEmisorIdentificacionFiscal(request.emisor().identificacionFiscal());
 
         operacion.setEmisor(new ParteOperacion(
                 request.emisor().institucion(),
