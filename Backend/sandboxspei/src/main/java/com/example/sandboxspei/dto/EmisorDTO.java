@@ -1,5 +1,5 @@
 package com.example.sandboxspei.dto;
-
+import io.swagger.v3.oas.annotations.media.Schema;
 import com.fasterxml.jackson.annotation.JsonInclude;
 
 /**
@@ -16,9 +16,19 @@ import com.fasterxml.jackson.annotation.JsonInclude;
 public record EmisorDTO(
         String institucion,
         String cuenta,
+        @Schema(
+                description = "Nombre del emisor. Debe contener únicamente letras y espacios, con una longitud de 1 a 40 caracteres.",
+                pattern = "^[\\p{L} ]{1,40}$",
+                example = "Juan Pérez"
+        )
         String nombre,
         String sucursal,
         DocumentoIdentidadDTO documentoIdentidad,
+        @Schema(
+                description = "Identificación fiscal (RFC) del emisor. Debe cumplir el formato de RFC válido.",
+                pattern = "^[A-ZÑ&]{3,4}\\d{6}[A-Z0-9]{3}$",
+                example = "GARE800101ABC"
+        )
         String identificacionFiscal
 ) {
 }
